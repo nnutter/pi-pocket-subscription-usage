@@ -19,6 +19,8 @@ const PAGE_EVERY_MS = 60_000;
 const AGE_EVERY_MS = 30_000;
 /** How often the panel reads again: it stays open across the work, so it asks the services less often than the page. */
 const PANEL_EVERY_MS = 10 * 60_000;
+/** The width at which Pi Pocket docks a panel beside the conversation: below it, a panel covers the conversation. */
+const DOCK_WIDTH = 1100;
 const BADGE_EVERY_MS = 5 * 60_000;
 /** How often the status item checks the session's model. The check reads the server's cache, never a service. */
 const QUOTA_EVERY_MS = 30_000;
@@ -571,14 +573,72 @@ export default function setup(pocket) {
         </div>`;
     }
 
-    /** The panel's own copy of the page: it stays open across the work, so it reads again every 10 minutes. */
-    const Docked = () => html`<${Usage} every=${PANEL_EVERY_MS} />`;
+    // Which view of the quotas shows now: the page or the panel. Each view says so while it draws, so a change of screen
+    // can move the quotas from one to the other.
+    let showing = null;
+
+    /** A view of the quotas that says which one it is while it draws, and stops saying so when it goes. */
+    const view = (which, every, gone = () => {}) => {
+        const View = () => {
+            useEffect(() => {
+                showing = which;
+
+                return () => {
+                    if (showing === which) {
+                        showing = null;
+                    }
+
+                    gone();
+                };
+            }, []);
+
+            return html`<${Usage} every=${every} />`;
+        };
+
+        return View;
+    };
+
+    /** The page: the quotas in the conversation's place. */
+    const Page = view("page", PAGE_EVERY_MS);
+
+    // The app docks a panel beside the conversation where the screen is wide enough, and covers the conversation where it
+    // is not. The quotas follow the app's rule: the panel where the screen has room for one, and the page where it does
+    // not. A phone, and an iPad in portrait, get the page.
+    const canDock = typeof pocket.panel === "function";
+    const wide = window.matchMedia(`(min-width: ${DOCK_WIDTH}px)`);
+    let docked = canDock && wide.matches;
+    let panel = null;
+
+    /** The panel goes where the screen has no room for it: the app's top bar and its places would open it over the
+     *  conversation, where the page belongs. */
+    const undock = () => {
+        if (!docked) {
+            panel?.remove();
+            panel = null;
+        }
+    };
+
+    /** The panel's own copy of the page: it stays open across the work, so it reads again every 10 minutes. It goes
+     *  when it has left the screen, so that it never draws without its content. */
+    const Docked = view("panel", PANEL_EVERY_MS, undock);
+
+    /** Where the quotas open now: the panel where the screen has room for it, the page where it does not. */
+    const quotas = () => (docked ? IN_PANEL : IN_PAGE);
+
+    /** The panel beside the conversation, where the app's own Browser and Files panels dock. */
+    const dock = () => {
+        panel = pocket.panel({ id: "usage", title: "Quotas", iconPath: BARS, component: Docked });
+    };
+
+    if (docked) {
+        dock();
+    }
 
     const rail = pocket.rail({
         id: "usage",
         title: "Quotas",
         iconPath: BARS,
-        ...IN_PAGE,
+        ...quotas(),
     });
 
     /** The rail's button counts the plans that are behind their window, where their quota may go unused. */
@@ -588,21 +648,9 @@ export default function setup(pocket) {
         rail.update({ badge: behind > 0 ? behind : null });
     }
 
-    pocket.page({ id: "usage", title: "Quotas", component: Usage });
+    pocket.page({ id: "usage", title: "Quotas", component: Page });
 
-    // The same page beside the conversation, where the app's own Browser and Files panels dock: one tap on the status
-    // line's quota shows it. A panel is experimental, so an older app gets the page alone.
-    const docks = typeof pocket.panel === "function";
-
-    if (docks) {
-        pocket.panel({
-            id: "usage",
-            title: "Quotas",
-            iconPath: BARS,
-            component: Docked,
-        });
-    }
-    pocket.launcher({
+    const launcher = pocket.launcher({
         id: "usage",
         label: "Quotas",
         detail: "Plan limits and prepaid balances",
@@ -629,14 +677,16 @@ export default function setup(pocket) {
             "limits",
             "usage",
         ],
-        ...IN_PAGE,
+        ...quotas(),
     });
+
+    // The status line's item, so that a change of screen can give it the new target.
+    let item = null;
 
     // The status line's quota: the plan that the model in the open session belongs to. It is experimental in Pi Pocket
     // 0.19, so an older app gets no item. The server reads the model from the session and keeps a reading up to 5
     // minutes, so this check costs no call to a service; when the model's provider changes, it asks for a fresh one.
     if (typeof pocket.status === "function") {
-        let item = null;
         let session = null;
         let shown = null;
         let generation = 0;
@@ -664,7 +714,7 @@ export default function setup(pocket) {
                     short: quota.short,
                     title: quota.title,
                     tone: quota.tone,
-                    ...(docks ? IN_PANEL : IN_PAGE),
+                    ...quotas(),
                 });
             } else {
                 item.update(quota);
@@ -747,6 +797,42 @@ export default function setup(pocket) {
             hide();
         });
     }
+
+    /**
+     * The screen changed: the panel comes and goes with the room, and the quotas move to the view that fits. The panel
+     * gives way to the page when the screen narrows, and the page gives way to the panel when it widens.
+     */
+    const resize = (event) => {
+        docked = canDock && event.matches;
+        // The view that shows now, before the change moves it.
+        const was = showing;
+
+        if (docked) {
+            dock();
+        } else {
+            // The panel no longer fits. It closes now, and it goes when it has left the screen.
+            pocket.closePanel();
+
+            if (was !== "panel") {
+                undock();
+            }
+        }
+
+        if (was === "panel" && !docked) {
+            // The page takes the panel's place.
+            pocket.openPage("usage");
+        } else if (was === "page" && docked) {
+            // The panel takes the page's place.
+            pocket.openPanel("usage");
+        }
+
+        rail.update(quotas());
+        launcher.update(quotas());
+        item?.update(quotas());
+    };
+
+    wide.addEventListener("change", resize);
+    pocket.onDispose(() => wide.removeEventListener("change", resize));
 
     // A reading in the background for the badge, while this tab is open; the server keeps answers a minute.
     const check = () =>
