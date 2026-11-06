@@ -302,6 +302,11 @@ export default function setup(pocket) {
 
     pocket.style("look.css");
 
+    // Where the quotas open: the page in the conversation's place, or the panel beside the conversation. Each names one
+    // target and clears the other, because a button does one thing at a time.
+    const IN_PAGE = { page: "usage", panel: undefined };
+    const IN_PANEL = { page: undefined, panel: "usage" };
+
     /**
      * A plan's limit: its name, a gauge of squares, how full it is, and when it resets, in a word on the right. Under
      * the gauge, a line says how much of the window has passed, so a gauge that runs past it is outpacing the window; it
@@ -573,7 +578,7 @@ export default function setup(pocket) {
         id: "usage",
         title: "Quotas",
         iconPath: BARS,
-        page: "usage",
+        ...IN_PAGE,
     });
 
     /** The rail's button counts the plans that are behind their window, where their quota may go unused. */
@@ -624,7 +629,7 @@ export default function setup(pocket) {
             "limits",
             "usage",
         ],
-        page: "usage",
+        ...IN_PAGE,
     });
 
     // The status line's quota: the plan that the model in the open session belongs to. It is experimental in Pi Pocket
@@ -659,7 +664,7 @@ export default function setup(pocket) {
                     short: quota.short,
                     title: quota.title,
                     tone: quota.tone,
-                    ...(docks ? { panel: "usage" } : {}),
+                    ...(docks ? IN_PANEL : IN_PAGE),
                 });
             } else {
                 item.update(quota);
