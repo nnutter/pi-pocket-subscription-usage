@@ -175,6 +175,10 @@ function quotaTitle(report, label, at) {
         lines.push(`${limit.label}: ${parts.join(" · ")}`);
     }
 
+    if (report.id === "github-copilot") {
+        lines.push(...(report.notes ?? []));
+    }
+
     const read = readTime(at);
 
     if (read !== "") {
@@ -215,9 +219,12 @@ function quotaOf(next) {
             ? ` · ${untilThen(reset).replace(/^in /, "")}`
             : "";
 
+    // Copilot's pools are separate: name the selected pool only when more than one has a limit.
+    const pool = report.id === "github-copilot" && report.limits.length > 1 ? `${limit.label} ` : "";
+
     return {
-        text: `${label} ${left}% left${resets}`,
-        short: `${left}%`,
+        text: `${label} ${pool}${left}% left${resets}`,
+        short: `${pool}${left}%`,
         title,
         tone:
             limit.level === "critical"
@@ -247,10 +254,12 @@ function ageOf(at) {
     return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
 }
 
-/** The plans with something to say: an account that is here, and a limit or a balance to show. */
+/** The plans with something to say: a limit, a balance, or Copilot's notes when it reports no finite quota. */
 const kept = (reports) =>
     (reports ?? []).filter((report) =>
-        report.ok ? report.limits.length > 0 || report.balance : !report.missing,
+        report.ok
+            ? report.limits.length > 0 || report.balance || (report.id === "github-copilot" && report.notes?.length > 0)
+            : !report.missing,
     );
 
 /** The limit that says the most about a plan: the one with the longest window, which it runs out of over time. */
@@ -433,7 +442,9 @@ export default function setup(pocket) {
                                       limit=${limit}
                                       label=${report.id === "ollama" && report.balance
                                           ? `${limit.label} (${money(report.balance.granted, report.balance.currency)})`
-                                          : limit.label}
+                                          : report.id === "github-copilot" && typeof limit.remainingCredits === "number"
+                                            ? `${limit.label} (${money(limit.remainingCredits / 100, "USD")})`
+                                            : limit.label}
                                   />`,
                               )}
                           </ul>`
@@ -658,6 +669,8 @@ export default function setup(pocket) {
         keywords: [
             "anthropic",
             "claude",
+            "github",
+            "copilot",
             "openai",
             "chatgpt",
             "codex",

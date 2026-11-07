@@ -1,0 +1,10 @@
+[tasks."ext:install"]
+description = "Install the extension into Pi Pocket"
+run = '''
+set -eu
+
+dest="${PI_POCKET_DIR:-$HOME/.pi-pocket}/extensions"
+install -d -- "$dest/subscription-usage"
+install -m 644 -- subscription-usage/index.js subscription-usage/look.css "$dest/subscription-usage/"
+install -m 644 -- subscription-usage.ts "$dest/subscription-usage.ts"
+'''

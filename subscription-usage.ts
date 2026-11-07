@@ -1,13 +1,14 @@
 /**
- * Subscription usage: a page on the rail with how much of your Claude, ChatGPT (Codex), OpenCode Go, Grok, Z.ai,
- * MiniMax, and Muse Code plans is used, and when each limit resets, plus the DeepSeek and Ollama Cloud balances when Pi
- * has a key for them. The server asks each service with the sign-ins already on this machine, so no key or token
- * reaches the browser.
+ * Subscription usage: a page on the rail with how much of your Claude, GitHub Copilot, ChatGPT (Codex), OpenCode Go,
+ * Grok, Z.ai, MiniMax, and Muse Code plans is used, and when each limit resets, plus the DeepSeek and Ollama Cloud
+ * balances when Pi has a key for them. The server asks each service with the sign-ins already on this machine, so no key
+ * or token reaches the browser.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import * as codingAgent from "@earendil-works/pi-coding-agent";
 // A type import is gone when the module runs: only the type checker reads this path. Pi Pocket links the public types
 // beside the drop-in, as `_pocket.d.ts`.
 import type { Web } from "./_pocket.d.ts";
@@ -26,6 +27,8 @@ interface Limit {
     binding?: boolean;
     /** How long the window is, in milliseconds, when the service says: the page ranks plans by their longest one. */
     windowMs?: number;
+    /** Copilot's remaining AI credits, each worth one US cent. */
+    remainingCredits?: number;
 }
 
 /** A prepaid account's balance: money left, not a share of a plan used. */
@@ -51,6 +54,7 @@ type OkReport = Extract<Report, { ok: true }>;
  */
 const PROVIDER_REPORTS: Record<string, { report: string; label: string }> = {
     anthropic: { report: "anthropic", label: "Claude" },
+    "github-copilot": { report: "github-copilot", label: "Copilot" },
     "openai-codex": { report: "openai", label: "Codex" },
     "opencode-go": { report: "opencode-go", label: "OpenCode Go" },
     xai: { report: "xai", label: "Grok" },
@@ -577,6 +581,96 @@ export default function createSubscriptionUsage(_host: unknown, web: Web) {
 
         return found.key;
     };
+
+    /** Copilot's quota endpoint needs the GitHub OAuth token, not the short-lived inference token from getAuth. */
+    async function copilot(signal: AbortSignal): Promise<Report> {
+        const name = "GitHub Copilot";
+
+        try {
+            if (typeof codingAgent.readStoredCredential !== "function") {
+                throw missing("Update Pi to read the GitHub Copilot sign-in.");
+            }
+
+            const stored = codingAgent.readStoredCredential("github-copilot");
+
+            if (stored?.type !== "oauth" || typeof stored.refresh !== "string" || stored.refresh === "") {
+                throw missing("Pi is not signed in to it: sign in under Menu → Providers.");
+            }
+
+            // Do not send an enterprise token to github.com, or to a host taken from the credential.
+            if (stored.enterpriseUrl) {
+                throw new Said("GitHub Enterprise Copilot usage is not supported yet.");
+            }
+
+            const response = await fetch("https://api.github.com/copilot_internal/user", {
+                headers: {
+                    authorization: `token ${stored.refresh}`,
+                    accept: "application/json",
+                    "x-github-api-version": "2025-04-01",
+                },
+                redirect: "error",
+                signal,
+            });
+
+            if (!response.ok) {
+                throw answered(response.status);
+            }
+
+            const data = (await response.json()) as Record<string, any>;
+            const limits: Limit[] = [];
+            const notes: string[] = [];
+            const snapshots = data?.quota_snapshots;
+
+            for (const [field, label] of [
+                ["premium_interactions", "Month"],
+                ["chat", "Chat"],
+                ["completions", "Completions"],
+            ]) {
+                const snapshot = snapshots?.[field!];
+
+                if (snapshot === null || typeof snapshot !== "object") {
+                    continue;
+                }
+
+                if (snapshot.unlimited === true) {
+                    if (field === "premium_interactions") {
+                        notes.push("Premium requests are unlimited.");
+                    }
+                } else if (typeof snapshot.percent_remaining === "number" && Number.isFinite(snapshot.percent_remaining)) {
+                    const percent = 100 - Math.max(0, Math.min(100, snapshot.percent_remaining));
+                    const quotaReset = resetOf(snapshot.quota_reset_at);
+                    // GitHub uses 0 when a snapshot has no reset; use the account's reset date in that case.
+                    const reset = Date.parse(quotaReset.resetsAt ?? "") > 0 ? quotaReset : resetOf(data.quota_reset_date);
+
+                    limits.push({
+                        label: label!,
+                        percent,
+                        ...reset,
+                        level: levelOf(percent),
+                        ...(field === "premium_interactions" &&
+                        data.token_based_billing === true &&
+                        typeof snapshot.remaining === "number" &&
+                        Number.isFinite(snapshot.remaining) &&
+                        snapshot.remaining >= 0
+                            ? { remainingCredits: snapshot.remaining }
+                            : {}),
+                    });
+                }
+
+                if (snapshot.overage_permitted === true) {
+                    notes.push(`${label}: paid overage is enabled.`);
+                }
+            }
+
+            if (limits.length === 0 && notes.length === 0) {
+                notes.push("GitHub did not report any limited quota data for this account.");
+            }
+
+            return { id: "github-copilot", name, ok: true, limits, notes };
+        } catch (error) {
+            return { id: "github-copilot", name, ...failure(error) };
+        }
+    }
 
     async function claude(signal: AbortSignal): Promise<Report> {
         const name = "Claude (Anthropic)";
@@ -1275,6 +1369,7 @@ export default function createSubscriptionUsage(_host: unknown, web: Web) {
         const reports = (
             await Promise.all([
                 claude(signal),
+                copilot(signal),
                 chatGpt(signal),
                 openCodeGo(signal),
                 grok(signal),

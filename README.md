@@ -1,12 +1,21 @@
 # Subscription usage
 
-A drop-in extension for [Pi Pocket](https://github.com/TannerMidd/pi-pocket). It adds a page to the rail. The page shows how much of your Claude, ChatGPT (Codex), OpenCode Go, Grok, Z.ai, MiniMax, and Muse Code plans you used, and when each limit resets. When Pi has a DeepSeek key, it also shows the DeepSeek balance, in money left rather than a percentage. With an Ollama Cloud key, it shows that plan's included credits, the money left in them, and the credits bought on top. When a plan's longer limit is used up, the shorter limits do not show.
+A drop-in extension for [Pi Pocket](https://github.com/TannerMidd/pi-pocket).
+It adds a page to the rail.
+The page shows how much of your Claude, GitHub Copilot, ChatGPT (Codex), OpenCode Go, Grok, Z.ai, MiniMax, and Muse Code plans you used, and when each limit resets.
+When Pi has a DeepSeek key, it also shows the DeepSeek balance, in money left rather than a percentage.
+With an Ollama Cloud key, it shows that plan's included credits, the money left in them, and the credits bought on top.
+When a plan's longer limit is used up, the shorter limits do not show.
 
 ## Install
 
 In Pi Pocket 0.14 or newer, open **Menu → Extensions → Find extensions**, and find **Subscription usage**. The gallery installs it turned off. Read its source, or ask Pi to review it. Then turn it on in **Menu → Extensions**.
 
-You can also copy these files into the extensions folder of Pi Pocket (`~/.pi-pocket/extensions/`), with the same names:
+To install from a checkout, run `mise run ext:install`.
+It copies the extension files into Pi Pocket's data folder (`~/.pi-pocket/extensions/`, or `$PI_POCKET_DIR/extensions/` when set), replacing any installed copies.
+Pi Pocket reloads the extension when it is on; otherwise, turn it on in **Menu → Extensions**.
+
+You can also copy these files into that folder with the same names:
 
 - `subscription-usage.ts`
 - `subscription-usage/index.js`
@@ -16,6 +25,11 @@ You can also copy these files into the extensions folder of Pi Pocket (`~/.pi-po
 
 - **On the server:** it adds one route, `GET usage`, for the owner only. The route asks each service for your usage:
     - Claude and OpenCode Go: with the sign-ins that Pi already has on this computer.
+    - GitHub Copilot: with Pi's GitHub Copilot sign-in (Menu → Providers), it reads the available premium request, chat, and completion quotas, their resets, and whether paid overage is enabled.
+      It shows the remaining AI credits in dollars, at $0.01 per credit, when GitHub reports them and confirms credit-based billing.
+      It uses GitHub's internal quota endpoint, which may change or differ by account.
+      It does not support GitHub Enterprise sign-ins, and it needs a Pi version that can read stored credentials.
+      It does not estimate a monthly pacing line because GitHub does not report a window length.
     - ChatGPT (Codex): it starts the Codex CLI (`codex app-server`), which uses its own sign-in. The Codex CLI must be installed and signed in (`codex login`).
     - Grok: with Pi's xAI sign-in for SuperGrok or X Premium (Menu → Providers). It reads the shared weekly pool, as the Grok CLI does. An xAI API key has no plan, so the page leaves Grok out.
     - Z.ai: with Pi's Z.ai key, for a GLM Coding Plan. It reads the 5-hour (and, on bigger plans, weekly) token windows and the monthly count of web search, web reader, and Zread calls. Without a Z.ai key, the page leaves Z.ai out.
