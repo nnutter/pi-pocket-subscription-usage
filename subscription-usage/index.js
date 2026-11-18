@@ -76,10 +76,9 @@ function lit(percent) {
 }
 
 /**
- * How far a limit is into its window, in percent: null when the service gives no length for the window or no reset, as
- * for a rolling window, which moves with every call.
+ * The fraction of a limit's window still left, or null when the service gives no window length or reset.
  */
-function windowShare(limit, now = Date.now()) {
+function windowLeft(limit, now) {
     const span = Number(limit.windowMs);
     const reset = Date.parse(limit.resetsAt ?? "");
 
@@ -88,9 +87,13 @@ function windowShare(limit, now = Date.now()) {
     }
 
     // A reset behind us is a window the service has not rolled yet: all of it has passed.
-    const left = Math.max(0, Math.min(span, reset - now));
+    return Math.max(0, Math.min(1, (reset - now) / span));
+}
 
-    return Math.round(100 - (left / span) * 100);
+function windowShare(limit) {
+    const left = windowLeft(limit, Date.now());
+
+    return left === null ? null : Math.round(100 - left * 100);
 }
 
 /**
@@ -279,17 +282,31 @@ function longest(limits) {
 }
 
 /**
- * Where a plan goes in the list, as two numbers to sort by: the least used of its longest window first. A plan that
- * only has a balance has no window to compare, and a plan that failed comes after both.
+ * Sort timed plans by unused quota relative to time left in their longest timed window.
+ * Then sort untimed plans by least used, with balance-only plans and failures last.
  */
-function rank(report) {
+function rank(report, now) {
     if (!report.ok) {
-        return [2, 0];
+        return [3, 0];
+    }
+
+    let best;
+    for (const limit of report.limits) {
+        const left = windowLeft(limit, now);
+        const span = Number(limit.windowMs);
+        if (left !== null && (best === undefined || span > best.span)) {
+            const unused = 100 - (Number(limit.percent) || 0);
+            const waste = left > 0 ? unused / left : unused > 0 ? Infinity : 0;
+            best = { span, waste };
+        }
+    }
+    if (best !== undefined) {
+        return [0, -best.waste];
     }
 
     const limit = longest(report.limits);
 
-    return limit === undefined ? [1, 0] : [0, Number(limit.percent) || 0];
+    return limit === undefined ? [2, 0] : [1, Number(limit.percent) || 0];
 }
 
 /**
@@ -537,9 +554,9 @@ export default function setup(pocket) {
             </div>`;
         }
 
-        // The plans that have something to say, the fullest against its window's clock first.
+        const now = Date.now();
         const shown = kept(data.reports)
-            .map((report) => ({ report, key: rank(report) }))
+            .map((report) => ({ report, key: rank(report, now) }))
             .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1])
             .map(({ report }) => report);
 
